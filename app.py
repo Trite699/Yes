@@ -13,8 +13,8 @@ app = Flask(__name__)
 CONVERTERS = {
     "GMD": "gs56-gmd-converter.py",
     "Script": "gs56-script-converter.py",
-    "Sounds PC": "asrc.py",
-    "Sounds NSW": "asrc-nsw.py"
+    "Sounds PC": "asrc31.py",
+    "Sounds NSW": "asrc31-nsw.py"
 }
 
 @app.route('/', methods=['GET', 'POST'])
