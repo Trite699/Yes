@@ -1,12 +1,12 @@
 import os
+import glob
 import subprocess
 from flask import Flask, request, send_file, render_template_string
 from werkzeug.utils import secure_filename
 
-UPLOAD_FOLDER = "uploads"
-OUTPUT_FOLDER = "outputs"
+UPLOAD_FOLDER = 'uploads'
+CONVERTER_FOLDER = 'Converter'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
 app = Flask(__name__)
 
@@ -19,15 +19,14 @@ CONVERTERS = {
 
 COMMAND_SETS = {
     "GMD": [
-        ("d", "d (Decode)"),
-        ("e", "e (Encode)"),
-        ("ex", "e (Encode with XOR)"),
-        ("i", "i (Raw Dump)")
+        ("i", "i (Import)"),
+        ("d", "d (Decrypt)"),
+        ("e", "e (Encrypt)")
     ],
     "Script": [
-        ("d", "d (Decode)"),
-        ("e", "e (Encode)"),
-        ("i", "i (Raw Dump)")
+        ("i", "i (Import)"),
+        ("d", "d (Decrypt)"),
+        ("e", "e (Encrypt)")
     ],
     "Sounds PC": [
         ("e", "e (Encode)"),
@@ -43,93 +42,65 @@ COMMAND_SETS = {
     ]
 }
 
+
 @app.route('/', methods=['GET', 'POST'])
 def upload_file():
-    if request.method == "POST":
+    if request.method == 'POST':
         converter = request.form.get("converter")
         command = request.form.get("command")
 
-        file = request.files.get("file")
-        if not file:
-            return "No file uploaded."
+        if 'file' not in request.files:
+            return "No file uploaded"
+
+        file = request.files['file']
+        if file.filename == '':
+            return "No file selected"
 
         filename = secure_filename(file.filename)
         input_path = os.path.join(UPLOAD_FOLDER, filename)
         file.save(input_path)
 
-        converter_script = os.path.join("Converter", CONVERTERS[converter])
+        converter_script = os.path.join(CONVERTER_FOLDER, CONVERTERS[converter])
 
-        # --------------------
-        #  GMD CORRECT COMMANDS
-        # --------------------
-        if converter == "GMD":
+        # ------------------------------
+        # BUILD CORRECT COMMAND (NO OUTPUT PATH)
+        # ------------------------------
+        cmd = ['python', converter_script, command]
 
-            if command == "d":
-                cmd = ["python", converter_script, "d", input_path]
+        # GS5 encryption requires --xor
+        if converter == "GMD" and command == "e" and filename.startswith("GS5"):
+            cmd.append("--xor")
 
-            elif command == "e":
-                cmd = ["python", converter_script, "e", input_path]
+        cmd.append(input_path)
 
-            elif command == "ex":  # XOR ENCRYPT
-                cmd = ["python", converter_script, "e", "--xor", input_path]
-
-            elif command == "i":  # RAW DUMP
-                out_dir = os.path.join(OUTPUT_FOLDER, filename + "_raw")
-                os.makedirs(out_dir, exist_ok=True)
-                cmd = ["python", converter_script, "i", "--out", out_dir, input_path]
-
-        # --------------------
-        # Script converter uses same format as GMD
-        # --------------------
-        elif converter == "Script":
-            if command in ("d", "e"):
-                cmd = ["python", converter_script, command, input_path]
-            elif command == "i":
-                out_dir = os.path.join(OUTPUT_FOLDER, filename + "_raw")
-                os.makedirs(out_dir, exist_ok=True)
-                cmd = ["python", converter_script, "i", "--out", out_dir, input_path]
-
-        # --------------------
-        # Sounds PC + NSW
-        # --------------------
-        else:
-            output_path = os.path.join(OUTPUT_FOLDER, f"converted_{filename}")
-            cmd = ["python", converter_script, command, input_path, output_path]
-
-        # RUN THE COMMAND
+        # ------------------------------
+        # RUN CONVERSION
+        # ------------------------------
         result = subprocess.run(cmd, capture_output=True, text=True)
 
         if result.returncode != 0:
-            return f"<pre>{result.stderr}</pre>"
+            return f"Conversion failed:<br><pre>{result.stderr}</pre>"
 
-        # GMD + Script produce multiple files → give ZIP
-        if converter in ("GMD", "Script") and command == "i":
-            return f"Raw dump completed.<br>Output folder: {out_dir}"
+        # ------------------------------
+        # FIND OUTPUT FILE CREATED BY CONVERTER
+        # ------------------------------
+        output_file = detect_output_file(filename)
 
-        # Sounds return a single output file
-        output_file = os.path.join(OUTPUT_FOLDER, f"converted_{filename}")
-        if os.path.exists(output_file):
-            return send_file(output_file, as_attachment=True)
+        if not output_file:
+            return "Conversion complete, but no output file was found."
 
-        # GMD encode/decode produces a new file in same folder
-        # find it
-        possible = filename.rsplit('.', 1)[0]
-        for f in os.listdir(UPLOAD_FOLDER):
-            if f.startswith(possible) and f != filename:
-                return send_file(os.path.join(UPLOAD_FOLDER, f), as_attachment=True)
+        return send_file(output_file, as_attachment=True)
 
-        return "Conversion complete, but output file not found."
-
-    # ------------------------
+    # ------------------------------
     # HTML UI
-    # ------------------------
-    return render_template_string("""
+    # ------------------------------
+    return render_template_string('''
     <!doctype html>
     <title>Upload & Convert</title>
-    <h1>Upload File</h1>
+    <h1>Upload File for Conversion</h1>
 
     <form method="post" enctype="multipart/form-data">
-      <label>Converter:</label>
+      <label>Choose converter:</label>
       <select name="converter" id="converter" onchange="updateCommands()">
         <option value="GMD">GMD</option>
         <option value="Script">Script</option>
@@ -137,36 +108,60 @@ def upload_file():
         <option value="Sounds NSW">Sounds NSW</option>
       </select><br><br>
 
-      <label>Command:</label>
+      <label>Choose command:</label>
       <select name="command" id="command"></select><br><br>
 
       <input type="file" name="file">
-      <input type="submit" value="Convert">
+      <input type="submit" value="Upload">
     </form>
 
     <script>
-      const COMMAND_SETS = {
-        "GMD": [["d","d (Decode)"],["e","e (Encode)"],["ex","e (Encode XOR)"],["i","i (Raw Dump)"]],
-        "Script": [["d","d (Decode)"],["e","e (Encode)"],["i","i (Raw Dump)"]],
+      const COMMANDS = {
+        "GMD": [["i","i (Import)"],["d","d (Decrypt)"],["e","e (Encrypt)"]],
+        "Script": [["i","i (Import)"],["d","d (Decrypt)"],["e","e (Encrypt)"]],
         "Sounds PC": [["e","e (Encode)"],["d","d (Decode)"],["i","i (Info)"],["r","r (Replace)"]],
         "Sounds NSW": [["e","e (Encode)"],["d","d (Decode)"],["i","i (Info)"],["r","r (Replace)"]]
       };
 
       function updateCommands() {
-        let sel = document.getElementById("converter").value;
-        let cmdSel = document.getElementById("command");
-        cmdSel.innerHTML = "";
-        COMMAND_SETS[sel].forEach(c=>{
-            let o=document.createElement("option");
-            o.value=c[0];
-            o.textContent=c[1];
-            cmdSel.appendChild(o);
+        let converter = document.getElementById("converter").value;
+        let select = document.getElementById("command");
+
+        select.innerHTML = "";
+        COMMANDS[converter].forEach(c => {
+          let opt = document.createElement("option");
+          opt.value = c[0];
+          opt.textContent = c[1];
+          select.appendChild(opt);
         });
       }
-
       window.onload = updateCommands;
     </script>
-    """)
+    ''')
 
-if __name__ == "__main__":
+
+def detect_output_file(filename):
+    """Detect output file produced by the converter."""
+
+    base = os.path.splitext(filename)[0]
+
+    # Possible output extensions for GMD/script
+    possible_exts = ["*.gmd", "*.txt", "*.json"]
+
+    found_files = []
+    for ext in possible_exts:
+        found_files += glob.glob(os.path.join(CONVERTER_FOLDER, base + ext))
+
+    if found_files:
+        return found_files[0]
+
+    # Sound converters output .wav or .bin
+    sound_exts = ["*.wav", "*.bin"]
+    for ext in sound_exts:
+        found_files += glob.glob(os.path.join(CONVERTER_FOLDER, base + ext))
+
+    return found_files[0] if found_files else None
+
+
+if __name__ == '__main__':
     app.run(host="0.0.0.0", port=5000)
