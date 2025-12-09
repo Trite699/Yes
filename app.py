@@ -17,21 +17,51 @@ CONVERTERS = {
     "Sounds NSW": "asrc31-nsw.py"
 }
 
-# Specify which converters need a command argument
-COMMAND_NEEDED = {"GMD", "Script"}
+# Converters that require a command
+COMMAND_NEEDED = {"GMD", "Script", "Sounds PC", "Sounds NSW"}
+
+# Different command sets per converter
+COMMAND_SETS = {
+    "GMD": [
+        ("i", "i (Import)"),
+        ("d", "d (Decrypt)"),
+        ("e", "e (Encrypt)")
+    ],
+    "Script": [
+        ("i", "i (Import)"),
+        ("d", "d (Decrypt)"),
+        ("e", "e (Encrypt)")
+    ],
+    "Sounds PC": [
+        ("e", "e (Encode)"),
+        ("d", "d (Decode)"),
+        ("i", "i (Info)"),
+        ("r", "r (Replace)")
+    ],
+    "Sounds NSW": [
+        ("e", "e (Encode)"),
+        ("d", "d (Decode)"),
+        ("i", "i (Info)"),
+        ("r", "r (Replace)")
+    ]
+}
 
 @app.route('/', methods=['GET', 'POST'])
 def upload_file():
     if request.method == 'POST':
         converter = request.form.get("converter")
-        command = request.form.get("command")  # May be None
+        command = request.form.get("command")
+
         if 'file' not in request.files or not converter:
             return "No file or converter selected"
+
         if converter in COMMAND_NEEDED and not command:
             return "No command selected for this converter"
+
         file = request.files['file']
         if file.filename == '':
             return "No selected file"
+
         filename = secure_filename(file.filename)
         input_path = os.path.join(UPLOAD_FOLDER, filename)
         output_path = os.path.join(OUTPUT_FOLDER, f'converted_{filename}')
@@ -39,52 +69,70 @@ def upload_file():
 
         # Build the subprocess command
         converter_script = os.path.join("Converter", CONVERTERS[converter])
+
         if converter in COMMAND_NEEDED:
             cmd = ['python', converter_script, command, input_path, output_path]
         else:
             cmd = ['python', converter_script, input_path, output_path]
 
         result = subprocess.run(cmd, capture_output=True, text=True)
+
         if result.returncode != 0:
             return f"Conversion failed:<br><pre>{result.stderr}</pre>"
 
         return send_file(output_path, as_attachment=True)
 
-    # HTML form lets user pick converter and command
+    # HTML UI
     return render_template_string('''
     <!doctype html>
-    <title>Upload and Convert</title>
+    <title>Upload & Convert</title>
     <h1>Upload File for Conversion</h1>
-    <form method=post enctype=multipart/form-data>
-      <label for="converter">Choose converter:</label>
-      <select name="converter" id="converter" onchange="toggleCommandDropdown()">
+
+    <form method="post" enctype="multipart/form-data">
+      <label>Choose converter:</label>
+      <select name="converter" id="converter" onchange="updateCommands()">
         <option value="GMD">GMD</option>
         <option value="Script">Script</option>
         <option value="Sounds PC">Sounds PC</option>
         <option value="Sounds NSW">Sounds NSW</option>
       </select><br><br>
+
       <div id="commandDiv">
-        <label for="command">Choose command:</label>
-        <select name="command" id="command">
-          <option value="i">i (Import)</option>
-          <option value="d">d (Decrypt)</option>
-          <option value="e">e (Encrypt)</option>
-        </select><br><br>
+        <label>Choose command:</label>
+        <select name="command" id="command"></select><br><br>
       </div>
-      <input type=file name=file>
-      <input type=submit value=Upload>
+
+      <input type="file" name="file">
+      <input type="submit" value="Upload">
     </form>
+
     <script>
-      function toggleCommandDropdown() {
-        var converter = document.getElementById('converter').value;
-        var commandDiv = document.getElementById('commandDiv');
-        if (converter === 'GMD' || converter === 'Script') {
-          commandDiv.style.display = 'block';
-        } else {
-          commandDiv.style.display = 'none';
-        }
+      const COMMAND_SETS = {
+        "GMD": [["i","i (Import)"],["d","d (Decrypt)"],["e","e (Encrypt)"]],
+        "Script": [["i","i (Import)"],["d","d (Decrypt)"],["e","e (Encrypt)"]],
+        "Sounds PC": [["e","e (Encode)"],["d","d (Decode)"],["i","i (Info)"],["r","r (Replace)"]],
+        "Sounds NSW": [["e","e (Encode)"],["d","d (Decode)"],["i","i (Info)"],["r","r (Replace)"]]
+      };
+
+      function updateCommands() {
+        let converter = document.getElementById("converter").value;
+        let cmdDiv = document.getElementById("commandDiv");
+        let cmdSelect = document.getElementById("command");
+
+        cmdSelect.innerHTML = "";
+
+        let cmds = COMMAND_SETS[converter];
+        cmds.forEach(c => {
+          let opt = document.createElement("option");
+          opt.value = c[0];
+          opt.textContent = c[1];
+          cmdSelect.appendChild(opt);
+        });
+
+        cmdDiv.style.display = cmds.length ? "block" : "none";
       }
-      window.onload = toggleCommandDropdown;
+
+      window.onload = updateCommands;
     </script>
     ''')
 
